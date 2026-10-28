@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""A small command-line to-do list app.
+
+Usage:
+    python todo.py add "Buy groceries" [--priority high]
+    python todo.py list [--all]
+    python todo.py done 3
+    python todo.py undo 3
+    python todo.py remove 3
+    python todo.py clear        # remove all completed tasks
+"""
+
+import argparse
+import json
+from datetime import datetime
+from pathlib import Path
+
+DATA_FILE = Path.home() / ".todo.json"
+PRIORITIES = {"high": 0, "medium": 1, "low": 2}
+
+
+def load_tasks():
+    if not DATA_FILE.exists():
+        return []
+    try:
+        return json.loads(DATA_FILE.read_text())
+    except json.JSONDecodeError:
+        print(f"Warning: {DATA_FILE} is corrupted; starting fresh.")
+        return []
+
+
+def save_tasks(tasks):
+    DATA_FILE.write_text(json.dumps(tasks, indent=2))
+
+
+def next_id(tasks):
+    return max((t["id"] for t in tasks), default=0) + 1
+
+
+def find_task(tasks, task_id):
+    for task in tasks:
+        if task["id"] == task_id:
+            return task
+    raise SystemExit(f"No task with id {task_id}.")
+
+
+def add(tasks, args):
+    task = {
+        "id": next_id(tasks),
+        "title": args.title,
+        "priority": args.priority,
+        "done": False,
+        "created": datetime.now().isoformat(timespec="minutes"),
+    }
+    tasks.append(task)
+    print(f"Added #{task['id']}: {task['title']} ({task['priority']})")
+
+
+def list_tasks(tasks, args):
+    shown = tasks if args.all else [t for t in tasks if not t["done"]]
+    if not shown:
+        print("Nothing to do. 🎉" if not args.all else "No tasks yet.")
+        return
+    shown.sort(key=lambda t: (t["done"], PRIORITIES[t["priority"]], t["id"]))
+    for t in shown:
+        box = "[x]" if t["done"] else "[ ]"
+        print(f"{box} #{t['id']:<3} {t['priority']:<6} {t['title']}")
+    remaining = sum(not t["done"] for t in tasks)
+    print(f"\n{remaining} remaining, {len(tasks) - remaining} done")
+
+
+def set_done(tasks, args, value):
+    task = find_task(tasks, args.id)
+    task["done"] = value
+    state = "completed" if value else "reopened"
+    print(f"Task #{task['id']} {state}: {task['title']}")
+
+
+def remove(tasks, args):
+    task = find_task(tasks, args.id)
+    tasks.remove(task)
+    print(f"Removed #{task['id']}: {task['title']}")
+
+
+def clear(tasks, args):
+    before = len(tasks)
+    tasks[:] = [t for t in tasks if not t["done"]]
+    print(f"Cleared {before - len(tasks)} completed task(s).")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="A simple to-do list.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("add", help="add a task")
+    p.add_argument("title")
+    p.add_argument("--priority", "-p", choices=PRIORITIES, default="medium")
+    p.set_defaults(func=add)
+
+    p = sub.add_parser("list", help="show tasks")
+    p.add_argument("--all", "-a", action="store_true", help="include completed")
+    p.set_defaults(func=list_tasks)
+
+    for name, value in (("done", True), ("undo", False)):
+        p = sub.add_parser(name, help=f"mark a task {'done' if value else 'not done'}")
+        p.add_argument("id", type=int)
+        p.set_defaults(func=lambda t, a, v=value: set_done(t, a, v))
+
+    p = sub.add_parser("remove", help="delete a task")
+    p.add_argument("id", type=int)
+    p.set_defaults(func=remove)
+
+    p = sub.add_parser("clear", help="delete all completed tasks")
+    p.set_defaults(func=clear)
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    tasks = load_tasks()
+    args.func(tasks, args)
+    if args.command != "list":
+        save_tasks(tasks)
+
+
+if __name__ == "__main__":
+    main()
